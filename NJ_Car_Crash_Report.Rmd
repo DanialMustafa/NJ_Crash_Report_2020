@@ -1,0 +1,670 @@
+---
+title: "NJ Car Crash Report (2020)"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+```{r, Loading Packages, echo=FALSE, results = 'hide', message=FALSE, warning=FALSE}
+library(tabulizer)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(sf)
+library(maps)
+```
+
+## Introduction
+
+Finding an idea for this project was difficult as I had many ideas but ran into many problems. The first time I tried starting this, I was really eager on creating a map of National Parks and show lines of people going into them from throughout the US, but I couldn't find any solid datasets. After a couple round of ideas, I decided to write about NJ crashes.
+
+In this notebook, I will be showing some of the major highways in NJ combined with some data on crash statistics from 2020. Since I go on Route 9 very frequently and it being the longest highway in NJ, I'll be starting with that!
+
+
+## Creating Dataframes
+
+To skip having to read the code, I imported a dataset from the Official NJ website about crash statistics. I ended up getting a 256 page document of many different things about crashes for nearly every single route in NJ. After a little bit of researching online and a bit of trial and error I finally managed to get my dataframe of Route 9 which you can see below. 
+
+Additionally, this data has Milepost locations for each of its data points so I decided it would be a good idea to also include another datasets that turns Milepost locations into Longitude and Latitude coordinates. I also obtained this data through NJ official website, but it came in the form of a .shp file which can be downloaded from the url below. I used the sf library to read it in and combine it with the Route 9 dataset so I could plot this data later on.
+
+Website: https://www.state.nj.us/transportation/refdata/accident/20/route20.pdf
+         https://www.state.nj.us/transportation/refdata/gis/zip/NJ_Milepost10ths_shp.zip
+
+```{r, Create Route 9 Dataframe, echo = FALSE, results='hide'}
+route9_raw <- extract_tables("https://www.state.nj.us/transportation/refdata/accident/20/route20.pdf",
+               method = "stream", 
+               output = "data.frame",
+               pages = 12:18,
+               header = FALSE)
+
+for (i in seq(length(route9_raw))) {
+  var_name <- paste0("route9_raw", i)
+  assign(var_name, route9_raw[[i]])
+}
+
+my_cols <- c("MP_to_MP", 
+             "Section_Length", 
+             "AADT", 
+             "Total_Crashes", 
+             "Fatal_Crashes",
+             "Injury_Crashes",
+             "Prop_Dam_Only_Crashes",
+             "Crash_Rate",
+             "County",
+             "Cross_Section")
+
+route9_1 <- cbind(route9_raw1[, 1:4], NA, route9_raw1[, 5:9]) |>
+  setNames(my_cols)
+route9_2 <- route9_raw2 |>
+  mutate(V1 = paste(V1, V2)) |>
+  select(-V2) |>
+  setNames(my_cols)
+route9_3 <- route9_raw3 |>
+  mutate(V1 = paste(V1, V2)) |>
+  select(-V2) |>
+  setNames(my_cols)
+route9_4 <- route9_raw4 |>
+  mutate(V1 = paste(V1, V2)) |>
+  select(-V2) |>
+  setNames(my_cols)
+route9_5 <- cbind(route9_raw5[1:1], route9_raw5[3:4], NA, route9_raw5[5:10]) |>
+  setNames(my_cols)
+route9_6 <- route9_raw6 |>
+  setNames(my_cols)
+route9_7 <- route9_raw7 |> 
+  mutate(V2 = str_extract(V1, "[0-9]+.[0-9]+$"),
+         V1 = str_extract(V1, r"([0-9]+\.[0-9]+\s*-\s*[0-9]+\.[0-9]+)")) |>
+  setNames(my_cols)
+
+route9_rough <- rbind(route9_1, route9_2, route9_3, route9_4, route9_5, route9_6, route9_7[1:12,])
+route9_rough[1,1] = "0.0 - 3.06"
+route9_rough[is.na(route9_rough)] <- 0
+
+route9_rough2 <- route9_rough |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_to_MP, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_to_MP, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") )) |>
+  select('MP_Start', 
+         'MP_End',
+         "Section_Length", 
+         "AADT",
+         "Total_Crashes",
+         "Fatal_Crashes",
+         "Injury_Crashes",
+         "Prop_Dam_Only_Crashes",
+         "Crash_Rate",
+         "County",
+         "Cross_Section")
+
+nj_roads <- as.data.frame(st_read("NJ_Milepost10ths_shp"))
+
+r9_roads <- nj_roads[order(nj_roads$MP),] |>
+  filter(SLD_NAME == "US 9") |>
+  select('MP',
+         'LATITUDE',
+         'LONGTUDE')
+
+route9_rough3 <- left_join(route9_rough2, 
+                           r9_roads, 
+                           by = join_by("MP_Start" == "MP")) |>
+                 drop_na(LATITUDE)
+
+route9 <- route9_rough3 |>
+  mutate(Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+
+```
+
+### Route 9 Dataframe
+```{r, Route 9 Plot, echo = FALSE}
+head(route9, 5)
+
+nj_map <- map_data("county", "new jersey")
+
+ggplot() +
+  geom_polygon(data = nj_map, aes(x = long, y = lat, group = group), fill = "lightgrey") +
+  geom_path(data = route9, aes(x = LONGTUDE, y = LATITUDE), linewidth = 1.5) +
+  coord_fixed() +
+  ggtitle("Map of New Jersey with Route 9") +
+  theme_void()
+
+```
+
+I originally planned to only have Route 9 on my NJ map, but in hindsight I guess I was too optimistic. The graph above looks a bit lonely and it's definitely not fun looking at just one road in NJ. 
+
+So, I decided to add in Route 18, Route 1, Route 130, and Route 46. I chose Route 18 because I commute on it every day to Rutgers and was just curious on what I'd find. The others I chose because of the website linked below. It claimed that those ones were one of the worst overall roads in NJ.
+Website: https://www.nj.com/news/2015/04/the_10_roughest_stretches_of_state_roads_in_nj_map.html
+
+Anyways, with a little bit of experience, I was able to knock the others out much faster as I reused a lot of the code that I used to get the Route 9 dataframe. You can see a part of the dataframes below.
+
+
+```{r, Create Route 18 Dataframe, echo = FALSE, results='hide'}
+route18_raw <- extract_tables("https://www.state.nj.us/transportation/refdata/accident/20/route20.pdf",
+               method = "stream", 
+               output = "data.frame",
+               pages = 28:29,
+               header = FALSE)
+
+for (i in seq(length(route18_raw))) {
+  var_name <- paste0("route18_raw", i)
+  assign(var_name, route18_raw[[i]])
+}
+
+route18_1 <- route18_raw1 |>
+  setNames(my_cols) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_to_MP, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_to_MP, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))")) |>
+  select('MP_Start', 
+         'MP_End',
+         "Section_Length", 
+         "AADT",
+         "Total_Crashes",
+         "Fatal_Crashes",
+         "Injury_Crashes",
+         "Prop_Dam_Only_Crashes",
+         "Crash_Rate",
+         "County",
+         "Cross_Section",
+         "Lanes",
+         "Shoulder",
+         "Median")
+route18_1[1,1] = 0.0
+route18_1[1,2] = 5.14
+
+
+route18_2 <- cbind(route18_raw2[1:5], NA, route18_raw2[6:10], NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route18_rough <- rbind(route18_1, route18_2)
+route18_rough[1:9][is.na(route18_rough[1:9])] <- 0
+
+r18_roads <- nj_roads[order(nj_roads$MP),] |>
+  filter(SLD_NAME == "NJ 18") |>
+  select('MP',
+         'LATITUDE',
+         'LONGTUDE')
+
+route18 <- left_join(route18_rough, 
+                           r18_roads, 
+                           by = join_by("MP_Start" == "MP")) |>
+                 drop_na(LATITUDE)
+
+
+```
+
+### Route 18 Dataframe
+```{r, Show first 5 rows of Rt. 18, echo=FALSE}
+head(route18, 5)
+```
+
+
+```{r, Create Route 1 Dataframe, echo = FALSE, results='hide'}
+route1_raw <- extract_tables("https://www.state.nj.us/transportation/refdata/accident/20/route20.pdf",
+               method = "stream", 
+               output = "data.frame",
+               pages = 3:6,
+               header = FALSE)
+
+for (i in seq(length(route1_raw))) {
+  var_name <- paste0("route1_raw", i)
+  assign(var_name, route1_raw[[i]])
+}
+
+route1_raw1[1,1] = "0.0 - 0.6"
+route1_1 <- route1_raw1 |>
+  setNames(my_cols) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_to_MP, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_to_MP, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))")) |>
+  select('MP_Start', 
+         'MP_End',
+         "Section_Length", 
+         "AADT",
+         "Total_Crashes",
+         "Fatal_Crashes",
+         "Injury_Crashes",
+         "Prop_Dam_Only_Crashes",
+         "Crash_Rate",
+         "County",
+         "Cross_Section",
+         "Lanes",
+         "Shoulder",
+         "Median")
+
+
+
+route1_2 <- cbind(route1_raw2, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route1_3 <- cbind(route1_raw3, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route1_4 <- cbind(route1_raw4, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route1_rough <- rbind(route1_1, route1_2, route1_3, route1_4)
+route1_rough[1:9][is.na(route1_rough[1:9])] <- 0
+
+r1_roads <- nj_roads[order(nj_roads$MP),] |>
+  filter(SLD_NAME == "US 1") |>
+  select('MP',
+         'LATITUDE',
+         'LONGTUDE')
+
+route1 <- left_join(route1_rough, 
+                           r1_roads, 
+                           by = join_by("MP_Start" == "MP")) |>
+                 drop_na(LATITUDE)
+
+
+```
+
+### Route 1 Dataframe
+```{r, Show first 5 rows of Rt. 1, echo=FALSE}
+head(route1, 5)
+```
+
+
+```{r, Create Route 130 Dataframe, echo = FALSE, results='hide'}
+route130_raw <- extract_tables("https://www.state.nj.us/transportation/refdata/accident/20/route20.pdf",
+               method = "stream", 
+               output = "data.frame",
+               pages = 155:159,
+               header = FALSE)
+
+for (i in seq(length(route130_raw))) {
+  var_name <- paste0("route130_raw", i)
+  assign(var_name, route130_raw[[i]])
+}
+
+route130_raw1[1,1] = "0.0 - 0.0"
+route130_1 <- route130_raw1 |>
+  setNames(my_cols) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_to_MP, r"([0-9]*\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_to_MP, "\\d*(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))")) |>
+  select('MP_Start', 
+         'MP_End',
+         "Section_Length", 
+         "AADT",
+         "Total_Crashes",
+         "Fatal_Crashes",
+         "Injury_Crashes",
+         "Prop_Dam_Only_Crashes",
+         "Crash_Rate",
+         "County",
+         "Cross_Section",
+         "Lanes",
+         "Shoulder",
+         "Median")
+
+
+
+route130_2 <- cbind(route130_raw2, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route130_3 <- cbind(route130_raw3[1:5], NA, route130_raw3[6:10], NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route130_4 <- cbind(route130_raw4, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route130_5 <- cbind(route130_raw5, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route130_rough <- rbind(route130_1, route130_2, route130_3, route130_4, route130_5)
+route130_rough[1:9][is.na(route130_rough[1:9])] <- 0
+
+r130_roads <- nj_roads[order(nj_roads$MP),] |>
+  filter(SLD_NAME == "US 130") |>
+  select('MP',
+         'LATITUDE',
+         'LONGTUDE')
+
+route130 <- left_join(route130_rough, 
+                           r130_roads, 
+                           by = join_by("MP_Start" == "MP")) |>
+                 drop_na(LATITUDE)
+
+
+```
+
+### Route 130 Dataframe
+```{r, Show first 5 rows of Rt. 130, echo=FALSE}
+head(route130, 5)
+```
+
+
+```{r, Create Route 46 Dataframe, echo = FALSE, results='hide'}
+route46_raw <- extract_tables("https://www.state.nj.us/transportation/refdata/accident/20/route20.pdf",
+               method = "stream", 
+               output = "data.frame",
+               pages = 85:90,
+               header = FALSE)
+
+for (i in seq(length(route46_raw))) {
+  var_name <- paste0("route46_raw", i)
+  assign(var_name, route46_raw[[i]])
+}
+
+route46_raw1[1,1] = "0.0 - 0.0"
+route46_1 <- route46_raw1 |>
+  setNames(my_cols) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_to_MP, r"([0-9]*\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_to_MP, "\\d*(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))")) |>
+  select('MP_Start', 
+         'MP_End',
+         "Section_Length", 
+         "AADT",
+         "Total_Crashes",
+         "Fatal_Crashes",
+         "Injury_Crashes",
+         "Prop_Dam_Only_Crashes",
+         "Crash_Rate",
+         "County",
+         "Cross_Section",
+         "Lanes",
+         "Shoulder",
+         "Median")
+
+
+
+route46_2 <- cbind(route46_raw2, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route46_3 <- cbind(route46_raw3, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route46_4 <- cbind(route46_raw4, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route46_5 <- cbind(route46_raw5, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+
+route46_6 <- cbind(route46_raw6, NA, NA, NA) |>
+  setNames(c("MP_Start", "MP_End", my_cols[2:10], "Lanes", "Shoulder", "Median")) |>
+  mutate(MP_Start = round(as.numeric(str_extract(MP_Start, r"([0-9]+\.[0-9]+)")), digits = 1),
+         MP_End = round(as.numeric(str_extract(MP_End, "\\d+(?:\\.\\d+)?(?=$|\\s*-)$")), digits = 1),
+         Section_Length = as.numeric(Section_Length),
+         AADT = as.numeric(str_remove(AADT, ",") ),
+         Lanes = str_extract(Cross_Section, r"([0-9]+(?= [A-Za-z]))"),
+         Shoulder = str_extract(Cross_Section, r"([A-Za-z/]+(?= Shoulder))"),
+         Median = str_extract(Cross_Section, r"([A-Za-z]+(?= Median))"))
+route46_6 <- route46_6[1:5,]
+
+
+
+route46_rough <- rbind(route46_1, route46_2, route46_3, route46_4)
+route46_rough[1:9][is.na(route46_rough[1:9])] <- 0
+
+r46_roads <- nj_roads[order(nj_roads$MP),] |>
+  filter(SLD_NAME == "US 46") |>
+  select('MP',
+         'LATITUDE',
+         'LONGTUDE')
+
+route46 <- left_join(route1_rough, 
+                           r46_roads, 
+                           by = join_by("MP_Start" == "MP")) |>
+                 drop_na(LATITUDE)
+
+head(route46, 5)
+```
+
+### Route 46 Dataframe
+```{r, Show first 5 rows of Rt. 46, echo=FALSE}
+head(route46, 5)
+```
+
+
+
+Now that we have all out datasets I'm going to combine them into one big dataset so I can easily work with all of them at the same time. I also included in this, code to export the combined dataframe into a .csv call 'alldata.csv'. 
+
+```{r, Combine Routes, echo = FALSE, results = 'hide'}
+route9 <- route9 |>
+  mutate(route = "US 9")
+route18 <- route18 |>
+  mutate(route = "NJ 18")
+route1 <- route1 |>
+  mutate(route = "US 1")
+route130 <- route130 |>
+  mutate(route = "US 130")
+route46 <- route46 |>
+  mutate(route = "US 46")
+alldata = rbind(route9, route18, route1, route130, route46)
+alldata[alldata$Cross_Section == "",]$Cross_Section <- NA
+alldata[alldata$County == "",]$County <- NA
+
+write.csv(alldata, 'alldata.csv')
+```
+
+### All Routes Dataset
+```{r, echo = FALSE}
+head(alldata, 5)
+```
+
+It would also be a good time to explain what each of these parameters mean as well:
+
+*  MP_Start, - Start and end positions of each point on its respective road
+*  MP_End 
+*  Section_Length - How long the section they are referring to in the datapoint (MP_End - MP_Start)
+*  AADT - Average Annual Daily Traffic; basically just the expected number of cars passing that section daily
+*  Total_Crashes, - Pretty self explanatory
+*  Fatal_Crashes, 
+*  Injury_Crashes, 
+*  Prop_Dam_Only_Crashes
+*  Crash_Rate - Crash Rate calculated by NJDOTS and NJTR-1
+*  County
+*  Cross_Section - Explanation of other conditions present during that stretch of road
+*  Lanes, Shoulder, Median - Cross_Section split up just for convenience
+*  LONGITUDE, LATITUDE - coordinates of MP at each data point
+*  route - which route the data point belongs to
+  
+I really hope I did a good job explaining these to you. Now that that's out of the way, we can finally get to the intersting things I found from this project. 
+
+
+## Data Visualization
+
+Let's first just appreciate the newest map that we just made.
+
+```{r, Map of New Jersey with 5 Major Roads, echo=FALSE }
+ggplot() +
+  geom_polygon(data = nj_map, aes(x = long, y = lat, group = group), fill = "lightgrey") +
+  geom_path(data = alldata, aes(x = LONGTUDE, y = LATITUDE, color = route), linewidth = 1.5) +
+  coord_fixed() +
+  ggtitle("Map of New Jersey with 5 Major Roads") +
+  labs(color = "Route Name") +
+  theme_void()
+```
+
+Wow, doesn't that look much better?
+
+One of the first things I wanted to look at in this project was where am I most likely to encounter accidents? Well it turns out that more accidents tend to happen up in North Jersey and on the border of Pennsylvania than it does in South Jersey. This is pretty reasonable as many people could be traveling to New York City, Newark, Camden, or Philadelphia.
+
+
+
+```{r, Number of Total Crashes Across Major Roads in NJ, echo=FALSE}
+ggplot() +
+  geom_polygon(data = nj_map, aes(x = long, y = lat, group = group), fill = "lightgrey") +
+  geom_point(data = alldata, aes(x = LONGTUDE, y = LATITUDE, color = Total_Crashes), size = 1.5) +
+  scale_color_gradient(low = "blue", high = "red") +
+  coord_fixed() +
+  ggtitle("Number of Total Crashes Across Major Routes in NJ") +
+  theme_void()
+
+```
+
+One thing I noticed was weird was how the bottom right of the mpa remain almost accident free. Looking at other variables, I found that the Cross Section matters shows a very familiar pattern.
+
+```{r, Cross Section Conditions of Routes in NJ, echo=FALSE}
+ggplot() +
+  geom_polygon(data = nj_map, aes(x = long, y = lat, group = group), fill = "lightgrey") +
+  geom_point(data = alldata, aes(x = LONGTUDE, y = LATITUDE, color = Cross_Section), size = 1.5) +
+  coord_fixed() +
+  ggtitle("Cross Section Conditions of Routes in NJ") +
+  theme_void()
+
+
+```
+
+And as I suspected, my hunch was right! Taking special note to the number of lanes, we see below that there are much less total crashes for roads who only have 2 or 3 lanes. I would make the inference that if there are more lanes, then that means that the location has a higher speed limit thus resulting in more crashes. However, without additional data there's no way to properly assert such a claim.
+
+```{r, Total Crashes by Cross Section and Number of Lanes, echo=FALSE}
+alldata |>
+  ggplot(aes(Total_Crashes, reorder(Cross_Section, Total_Crashes), fill = Lanes )) + 
+  geom_boxplot() +
+  ggtitle("Total Crashes by Cross Section and Number of Lanes") +
+  xlab("Total Crashes") +
+  ylab("Cross Section")
+
+
+```
+
+
+One last thing I wanted to show was the crash rates by Shoulder and Median condition. We already know that a road with 4 or more lanes causes many accidents but is there anything else this data can tell us? Looking at the Crash Rate by Shoulder for each route, we could argue that roads Without Shoulders cause more accidents, but there's nothing really concrete.
+
+```{r, Crash Rate by Shoulder for each Route (Filtered to 4 or More Lanes), echo = FALSE}
+alldata |>
+  filter(Lanes == '4') |>
+  ggplot(aes(reorder(route, -Crash_Rate), Crash_Rate, fill = Shoulder)) + 
+  geom_boxplot() +
+  ggtitle("Crash Rate by Shoulder for each Route (Filtered to 4 or More Lanes)") +
+  xlab("Route") + 
+  ylab("Crash Rate (Perentage)")
+
+```
+
+Looking at this plot though we can see that roads in US 1, US 46, and US 9 with No Median clearly have the highest median (ironically) of Crash Rates. Roads US 130 and NJ 18 don't have data for Median conditions however meaning that although the relationship isn't concrete, it's something to surely look into. 
+
+```{r, Crash Rate by Median for each Route (Filtered to 4 or More Lanes), echo = FALSE}
+alldata |>
+  filter(Lanes == '4') |>
+  ggplot(aes(reorder(route, -Crash_Rate), Crash_Rate, fill = Median)) + 
+  geom_boxplot() +
+  ggtitle("Crash Rate by Median for each Route (Filtered to 4 or More Lanes)") +
+  xlab("Route") + 
+  ylab("Crash Rate (Perentage)")
+
+
+
+```
+
+## Conclusion
+
+This concludes my report on the five major roads in NJ that I chose to survey. Although it's reasonable to assume that more traffic results in more crashes, I hope my maps gave a bit more insight into the issue. I'm also shocked I was able to find a potentially relevant relationship from this project. I never would have imagined that this project would have turned out this way.
+
+If I were to continue with this project I would certainly try to expand my data by using all of the different routes in the Crash Statistics for NJ in 2020 instead of just the 5 I decided to choose. On top of that, I would especially try to get some related data set about the NJ Turnpike and the Garden State Parkway as those two would give the best insight on crashes as they have the most amount of traffic crossing it daily. 
+
+Some variables I would plan to get are the types of cars involved in the crash, speed limits for each milepost, light post locations data or even the weather at the time of the crash. From these I would be able to perform a statistical analysis such as ANOVA or chi-square and possibly find some correlations between accidents and what causes them.
+
+
+
+
+
