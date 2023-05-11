@@ -1,3 +1,0 @@
-This is a report I did on NJ Crash Statistics from 2020. This data was web scraped from NJ DOTS website. Links to where I got each data from is in the README.md file.
-
-In this report, I perform web scraping and data transformations to create plot that provide insight into accidents in NJ. I explore things such as density of crashes, condition of roads, and location of accidents.
